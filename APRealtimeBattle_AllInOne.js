@@ -1,6 +1,6 @@
 /*:
  * @target MZ
- * @plugindesc v2.1.09 TPBリアルタイム(AP)操作 + 戦闘トリガー(味方/敵/回避/敗北/逃走)コモンイベント + 特定行動トリガー(可変/パラメータ/前後コモン) + 直前行動コンテキスト + パリィ + BBW(行動別) (ログ強化)
+ * @plugindesc v2.1.10 TPBリアルタイム(AP)操作 + 戦闘トリガー(味方/敵/回避/敗北/逃走)コモンイベント + 特定行動トリガー(可変/パラメータ/前後コモン) + 直前行動コンテキスト + パリィ + BBW(行動別) (ログ強化)
  * @author M.I.P
 
  * @param StallRescueMode
@@ -1265,8 +1265,8 @@ function _aprbResolvePluginName(defaultName) {
   return defaultName;
 }
 const PLUGIN_NAME = _aprbResolvePluginName("APRealtimeBattle_AllInOne");
-  const _APRB_VERSION = 'v2.1.09-fix6x-r47-uiVisibilityLatch5-stallActNowKick1-forceBmAlwaysIfNotCalled-cinMsgInputFix1-iconHideLatch8-battleTimeFreezeFix4';
-  const _APRB_BUILD_DATE = "2026-01-23";
+  const _APRB_VERSION = 'v2.1.10-fix7-keepFrameRefresh1-uiVisibilityLatch5-stallActNowKick1-forceBmAlwaysIfNotCalled-cinMsgInputFix1-iconHideLatch8-battleTimeFreezeFix4';
+  const _APRB_BUILD_DATE = "2026-02-04";
   const _APRB_BUILD = _APRB_BUILD_DATE;
   const _APRB_AUTHOR = "M.I.P";
   let _aprbVersionLogged = false;
@@ -8352,7 +8352,7 @@ for (const ln of lines) {
 /* === v2.1.07-dbgdump hotfix: BBW0 hold & FORCE-BM even before action phase === */
 (function(){
   'use strict';
-  const VER = 'v2.1.09-fix6';
+  const VER = 'v2.1.10-fix7-keepFrameRefresh1';
 
   // Shared hold state (attack/guard input -> keep BBW0 intent for a short time)
   var _aprbBbw0HoldFrames = 0;
@@ -8884,7 +8884,21 @@ if (typeof BattleManager !== "undefined" && BattleManager.update && !BattleManag
     if (frames <= 0) return 0;
     const map = aprbEnsureMap(battler);
     if (!map) return 0;
-    if (map[stateId] == null) map[stateId] = frames;
+
+    // NOTE: APRB keep-frame states must refresh correctly on re-apply.
+    // If a prior instance left a stale/zero remain value in the map, the next apply could be erased immediately.
+    // Refresh when missing OR stale (<=0). (Do NOT shorten an active remaining duration here.)
+    if (map[stateId] == null || map[stateId] <= 0) map[stateId] = frames;
+    return map[stateId];
+  }
+
+  function aprbRefreshKeepFrame(battler, stateId) {
+    const state = $dataStates && $dataStates[stateId];
+    const frames = aprbGetKeepFramesFromState(state);
+    if (frames <= 0) return 0;
+    const map = aprbEnsureMap(battler);
+    if (!map) return 0;
+    map[stateId] = frames;
     return map[stateId];
   }
 
@@ -8929,7 +8943,9 @@ if (typeof BattleManager !== "undefined" && BattleManager.update && !BattleManag
     Game_BattlerBase.prototype.addState = function(stateId) {
       _addState.call(this, stateId);
       if (!$gameParty || !$gameParty.inBattle || !$gameParty.inBattle()) return;
-      aprbInitIfMissing(this, stateId);
+
+      // Refresh keep-frame on (re)apply to avoid stale remain values.
+      aprbRefreshKeepFrame(this, stateId);
     };
 
     const _removeState = Game_BattlerBase.prototype.removeState;
@@ -8937,6 +8953,16 @@ if (typeof BattleManager !== "undefined" && BattleManager.update && !BattleManag
       _removeState.call(this, stateId);
       if (this && this._aprbStateKeepMap) delete this._aprbStateKeepMap[stateId];
     };
+
+    // Some plugins override Game_Battler.prototype.removeState; keep the map consistent there as well.
+    if (typeof Game_Battler !== "undefined" && Game_Battler.prototype) {
+      const _gbRemoveState = Game_Battler.prototype.removeState;
+      Game_Battler.prototype.removeState = function(stateId) {
+        _gbRemoveState.call(this, stateId);
+        if (this && this._aprbStateKeepMap) delete this._aprbStateKeepMap[stateId];
+      };
+    }
+
   }
 
   // Tick from Scene_Battle.update using Graphics.frameCount guard (independent of BattleManager.update)
